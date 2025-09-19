@@ -6,8 +6,8 @@ from requests.exceptions import RequestException
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-
 BASE_URL = "https://quotes.toscrape.com"
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Scraper/1.0)"}
 
 
 @dataclass
@@ -20,35 +20,43 @@ class Quote:
 QUOTE_FIELDS = [field.name for field in fields(Quote)]
 
 
-def get_page(page_number: int) -> bytes:
-    url = urljoin(BASE_URL, f"page/{page_number}/")
-    try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        return response.content
-    except RequestException as e:
-        print(f"Request failed for {url}: {e}")
-        return b""
+def get_page(url: str) -> bytes:
+    for attempt in range(3):
+        try:
+            response = requests.get(url, timeout=5, headers=HEADERS)
+            response.raise_for_status()
+            return response.content
+        except RequestException as e:
+            print(f"Attempt {attempt + 1} failed for {url}: {e}")
+            time.sleep(0.2)
+    raise RuntimeError(f"Failed to fetch page {url} after 3 attempts")
+
+
+def get_next_page_url(soup: BeautifulSoup) -> str | None:
+    next_link = soup.select_one("li.next a")
+    if next_link:
+        return urljoin(BASE_URL, next_link["href"])
+    return None
 
 
 def get_all_quotes() -> list[Quote]:
     collected_quotes = []
-    page = 1
-    while True:
-        html_content = get_page(page)
-        if not html_content:
-            break
+    url = BASE_URL
+    while url:
+        html_content = get_page(url)
         soup = BeautifulSoup(html_content, "html.parser")
         quotes_on_page = soup.select("div.quote")
         if not quotes_on_page:
             break
         for quote in quotes_on_page:
-            collected_quotes.append(Quote(
-                text=quote.select_one("span.text").text,
-                author=quote.select_one("small.author").text,
-                tags=[tag.text for tag in quote.select("div.tags a")]
-            ))
-        page += 1
+            collected_quotes.append(
+                Quote(
+                    text=quote.select_one("span.text").text,
+                    author=quote.select_one("small.author").text,
+                    tags=[tag.text for tag in quote.select("div.tags a")],
+                )
+            )
+        url = get_next_page_url(soup)
         time.sleep(0.2)
     return collected_quotes
 
